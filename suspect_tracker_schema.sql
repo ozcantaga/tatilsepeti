@@ -1,22 +1,118 @@
 -- ========================================================================
--- ŞÜPHELİ KİŞİ TESPİTİ & ÇAPRAZ EŞLEŞTİRME SİSTEMİ (CROSS-MATCH TRACKER)
--- Hedef: WhatsApp 700 Numara, Facebook ve Çoklu Domain Ziyaretçilerini
---        Kalıcı İmza + Donanımsal Parmak İzi (GPU/Canvas/Audio) ile Eşleştirme
+-- 🔐 ŞÜPHELİ KİŞİ TESPİTİ & ÇAPRAZ EŞLEŞTİRME SİSTEMİ
+-- Versiyon: 3.0 (Olasılık Puanlama Motoru Uyumlu)
+-- Tarih: 2026-08-27
 -- ========================================================================
 -- Bu SQL dosyasını Supabase Dashboard > SQL Editor ekranında çalıştırın.
+--
+-- SİSTEM MİMARİSİ:
+-- 1) facebook_suspect_logs  → Bülent Küçük Blogu ziyaretçileri (script.js yazar)
+-- 2) cesme_holiday_leads    → Tatil Sepeti / WhatsApp ziyaretçileri (tatilsepeti/script.js yazar)
+-- 3) Panel (panel.html)     → Her iki tabloyu okur, client-side olasılık motoru ile çapraz eşleştirir
+--
+-- ⚠️ DİKKAT: Bu script mevcut tabloları SİLER ve sıfırdan oluşturur!
 -- ========================================================================
 
--- 1) ANA TABLO: cesme_holiday_leads (Tüm kolonlar & Güvenli Güncellemeler)
-CREATE TABLE IF NOT EXISTS cesme_holiday_leads (
+-- ========================================================================
+-- 0) ESKİ TABLOLARI VE VIEW'LARI TEMİZLE
+-- ========================================================================
+DROP VIEW IF EXISTS matched_suspect_identities CASCADE;
+DROP VIEW IF EXISTS suspect_cross_match_view CASCADE;
+DROP TABLE IF EXISTS facebook_suspect_logs CASCADE;
+DROP TABLE IF EXISTS cesme_holiday_leads CASCADE;
+DROP TABLE IF EXISTS whatsapp_leads CASCADE;
+DROP TABLE IF EXISTS facebook_leads CASCADE;
+DROP TABLE IF EXISTS unified_suspect_tracker CASCADE;
+
+-- ========================================================================
+-- 1) TABLO: facebook_suspect_logs
+--    Bülent Küçük Blogu'na Facebook üzerinden gelen ziyaretçiler
+--    Blog script.js → DEFAULT_TABLE: 'facebook_suspect_logs'
+-- ========================================================================
+CREATE TABLE facebook_suspect_logs (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    fingerprint_hash TEXT NOT NULL,
-    device_signature TEXT,
-    target_phone TEXT,
+    
+    -- 🔑 KİMLİK & İMZA (Çapraz Eşleştirmenin Temel Anahtarları)
+    fingerprint_hash TEXT NOT NULL,          -- Donanımsal parmak izi (GPU+Canvas+Audio birleşik hash)
+    device_signature TEXT,                   -- Zombie ID (LocalStorage/Cookie/IndexedDB kasası)
+    target_id TEXT,                          -- Hedef şüpheli referansı (ör: suspect1)
+    campaign_source TEXT DEFAULT 'facebook_fake',
+    channel TEXT DEFAULT 'facebook',
+    project_domain TEXT DEFAULT 'bulentkucuk-blog',
+    
+    -- 📍 COĞRAFİ KONUM & AĞ
+    ip_address TEXT,
+    city TEXT,
+    region TEXT,
+    country TEXT,
+    latitude TEXT,
+    longitude TEXT,
+    location_type TEXT DEFAULT 'IP Geolocation',
+    timezone TEXT,
+    
+    -- 💻 CİHAZ, TARAYICI & DONANIMSAL PARMAK İZİ
+    device_type TEXT,                        -- Desktop / Mobile / Tablet
+    os TEXT,                                 -- Windows / iOS / Android / macOS
+    os_version TEXT,                         -- 10 / 18.1 / 14
+    browser TEXT,                            -- Chrome / Safari / Edge
+    browser_version TEXT,                    -- 128.0.6613.120
+    browser_languages TEXT,                  -- tr,en-US,da
+    browser_platform TEXT,                   -- Win32 / MacIntel / Linux armv81
+    gpu_vendor TEXT,                         -- Google Inc. / Apple
+    gpu_renderer TEXT,                       -- ANGLE (NVIDIA GeForce RTX 4070) / Apple M2
+    screen_resolution TEXT,                  -- 1920x1080 / 390x844
+    window_size TEXT,                        -- 1920x937 / 390x844
+    color_depth TEXT,                        -- 24 / 30
+    device_pixel_ratio TEXT,                 -- 1 / 2 / 3
+    hardware_concurrency INTEGER,            -- CPU çekirdek sayısı (8, 10, 12...)
+    device_memory TEXT,                      -- RAM GB (4, 8, 16...)
+    battery_level INTEGER,                   -- Pil yüzdesi (0-100)
+    battery_charging BOOLEAN,               -- Şarjda mı?
+    network_type TEXT,                       -- 4g / wifi / ethernet
+    network_downlink TEXT,                   -- İndirme hızı Mbps
+    network_rtt TEXT,                        -- Ağ gecikmesi ms
+    canvas_hash TEXT,                        -- 2D Canvas grafik motoru hash'i
+    audio_hash TEXT,                         -- Web Audio frekans tepki hash'i
+    touch_support TEXT,                      -- Dokunmatik ekran var mı?
+    
+    -- 📊 DAVRANIŞ & ETKİLEŞİM
+    visitor_name TEXT,                       -- Ziyaretçi defterine yazdığı isim
+    visitor_phone TEXT,                      -- Ziyaretçi defterine yazdığı telefon
+    visitor_email TEXT,                      -- E-posta
+    visitor_message TEXT,                    -- Bloga bıraktığı mesaj
+    watched_videos JSONB DEFAULT '[]'::jsonb,
+    last_watched_video TEXT,                 -- Son izlediği video
+    video_watch_duration INTEGER DEFAULT 0,  -- Video izleme süresi (saniye)
+    time_spent_seconds INTEGER DEFAULT 0,    -- Toplam sitede kalma süresi
+    max_scroll_depth INTEGER DEFAULT 0,      -- Sayfayı ne kadar aşağı kaydırdı (%)
+    clicked_elements JSONB DEFAULT '[]'::jsonb,
+    is_submitted BOOLEAN DEFAULT FALSE,      -- Form gönderdi mi?
+    user_agent TEXT,                         -- Ham tarayıcı bilgisi
+    referrer TEXT,                           -- Nereden geldi?
+    url_params JSONB DEFAULT '{}'::jsonb,    -- URL parametreleri
+    
+    -- ⏰ ZAMAN DAMGALARI
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ========================================================================
+-- 2) TABLO: cesme_holiday_leads
+--    Tatil Sepeti sayfasına WhatsApp linki ile gelen ziyaretçiler
+--    Tatilsepeti script.js → DEFAULT_TABLE: 'cesme_holiday_leads'
+-- ========================================================================
+CREATE TABLE cesme_holiday_leads (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    
+    -- 🔑 KİMLİK & İMZA (Çapraz Eşleştirmenin Temel Anahtarları)
+    fingerprint_hash TEXT NOT NULL,          -- Donanımsal parmak izi (Blog ile BİREBİR AYNI algoritma)
+    device_signature TEXT,                   -- Zombie ID (4 katmanlı kalıcı kasa)
+    target_phone TEXT,                       -- WhatsApp'tan gelen hedef telefon numarası
     campaign_source TEXT DEFAULT 'direct',
     channel TEXT,
     project_domain TEXT DEFAULT 'alacati-cesme-promo',
     
-    -- Müşteri İletişim & Form Bilgileri
+    -- 👤 MÜŞTERİ BİLGİLERİ (Form Doldurursa)
     full_name TEXT,
     phone TEXT,
     email TEXT,
@@ -30,7 +126,7 @@ CREATE TABLE IF NOT EXISTS cesme_holiday_leads (
     special_requests TEXT,
     budget_range TEXT,
     
-    -- Coğrafi Konum & Ağ (0. Saniye IP & Hassas GPS)
+    -- 📍 COĞRAFİ KONUM & AĞ
     ip_address TEXT,
     city TEXT,
     region TEXT,
@@ -40,7 +136,7 @@ CREATE TABLE IF NOT EXISTS cesme_holiday_leads (
     location_type TEXT DEFAULT 'IP Geolocation',
     timezone TEXT,
     
-    -- Cihaz, Tarayıcı & Donanımsal Parmak İzi Detayları
+    -- 💻 CİHAZ, TARAYICI & DONANIMSAL PARMAK İZİ
     device_type TEXT,
     os TEXT,
     os_version TEXT,
@@ -58,196 +154,80 @@ CREATE TABLE IF NOT EXISTS cesme_holiday_leads (
     device_memory TEXT,
     battery_level INTEGER,
     battery_charging BOOLEAN,
-    connection_type TEXT,
-    is_touch_device BOOLEAN DEFAULT false,
-    cookies_enabled BOOLEAN DEFAULT true,
-    referrer TEXT,
-    page_url TEXT,
-    user_agent TEXT,
-    raw_client_info JSONB DEFAULT '{}'::jsonb,
+    connection_type TEXT,                     -- 4g / wifi
+    network_type TEXT,                        -- Alternatif ağ tipi alanı
+    network_downlink TEXT,
+    network_rtt TEXT,
+    canvas_hash TEXT,
+    audio_hash TEXT,
+    touch_support TEXT,
+    is_touch_device BOOLEAN DEFAULT FALSE,
+    cookies_enabled BOOLEAN DEFAULT TRUE,
     
-    -- Ziyaret & Canlı Süreç Takibi
+    -- 📊 DAVRANIŞ & ETKİLEŞİM
     total_visits INTEGER DEFAULT 1,
-    form_submitted BOOLEAN DEFAULT false,
+    form_submitted BOOLEAN DEFAULT FALSE,
     time_spent_seconds INTEGER DEFAULT 0,
     max_scroll_percent INTEGER DEFAULT 0,
+    max_scroll_depth INTEGER DEFAULT 0,
+    clicked_elements JSONB DEFAULT '[]'::jsonb,
+    form_interaction_count INTEGER DEFAULT 0,
+    is_submitted BOOLEAN DEFAULT FALSE,
+    user_agent TEXT,
+    referrer TEXT,
+    page_url TEXT,
+    url_params JSONB DEFAULT '{}'::jsonb,
+    raw_client_info JSONB DEFAULT '{}'::jsonb,
     
-    -- Zaman Damgaları
+    -- ⏰ ZAMAN DAMGALARI
     first_seen_at TIMESTAMPTZ DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ DEFAULT NOW(),
     submitted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Tablo önceden varsa eksik kolonları güvenle ekle (Idempotent ALTER TABLE)
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS device_signature TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS target_phone TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS campaign_source TEXT DEFAULT 'direct';
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS channel TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS region TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS location_type TEXT DEFAULT 'IP Geolocation';
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS selected_package TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS check_in_date TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS check_out_date TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS adult_count INTEGER DEFAULT 2;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS child_count INTEGER DEFAULT 0;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS special_requests TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS form_submitted BOOLEAN DEFAULT false;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS time_spent_seconds INTEGER DEFAULT 0;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS max_scroll_percent INTEGER DEFAULT 0;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS user_agent TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS browser_version TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS browser_languages TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS browser_platform TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS os_version TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS gpu_vendor TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS gpu_renderer TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS color_depth TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS device_pixel_ratio TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS hardware_concurrency INTEGER;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS device_memory TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS battery_level INTEGER;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS battery_charging BOOLEAN;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS connection_type TEXT;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS is_touch_device BOOLEAN DEFAULT false;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS cookies_enabled BOOLEAN DEFAULT true;
-ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS raw_client_info JSONB DEFAULT '{}'::jsonb;
+-- ========================================================================
+-- 3) HIZLI SORGULAMA İNDEKSLERİ
+--    Çapraz eşleştirme performansı için kritik
+-- ========================================================================
 
--- 2) İSTEĞE BAĞLI AYRI KANAL TABLOLARI (WhatsApp Leads & Facebook Leads)
-CREATE TABLE IF NOT EXISTS whatsapp_leads (LIKE cesme_holiday_leads INCLUDING ALL);
-CREATE TABLE IF NOT EXISTS facebook_leads (LIKE cesme_holiday_leads INCLUDING ALL);
+-- Facebook Suspect Logs İndeksleri
+CREATE INDEX idx_fb_fingerprint ON facebook_suspect_logs(fingerprint_hash);
+CREATE INDEX idx_fb_signature ON facebook_suspect_logs(device_signature);
+CREATE INDEX idx_fb_gpu ON facebook_suspect_logs(gpu_renderer);
+CREATE INDEX idx_fb_ip ON facebook_suspect_logs(ip_address);
+CREATE INDEX idx_fb_created ON facebook_suspect_logs(created_at);
 
--- 3) ORTAK ŞÜPHELİ LOG TABLOSU (unified_suspect_tracker)
-CREATE TABLE IF NOT EXISTS unified_suspect_tracker (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    device_signature TEXT,
-    fingerprint_hash TEXT NOT NULL,
-    target_phone TEXT,
-    campaign_source TEXT,
-    channel TEXT,
-    target_table TEXT DEFAULT 'cesme_holiday_leads',
-    page_url TEXT,
-    referrer TEXT,
-    ip_address TEXT,
-    city TEXT,
-    region TEXT,
-    country TEXT,
-    latitude TEXT,
-    longitude TEXT,
-    device_type TEXT,
-    os TEXT,
-    os_version TEXT,
-    browser TEXT,
-    browser_version TEXT,
-    gpu_vendor TEXT,
-    gpu_renderer TEXT,
-    screen_resolution TEXT,
-    window_size TEXT,
-    battery_level INTEGER,
-    connection_type TEXT,
-    user_agent TEXT,
-    raw_client_info JSONB DEFAULT '{}'::jsonb,
-    time_spent_seconds INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Cesme Holiday Leads İndeksleri
+CREATE INDEX idx_leads_fingerprint ON cesme_holiday_leads(fingerprint_hash);
+CREATE INDEX idx_leads_signature ON cesme_holiday_leads(device_signature);
+CREATE INDEX idx_leads_target_phone ON cesme_holiday_leads(target_phone);
+CREATE INDEX idx_leads_gpu ON cesme_holiday_leads(gpu_renderer);
+CREATE INDEX idx_leads_ip ON cesme_holiday_leads(ip_address);
+CREATE INDEX idx_leads_created ON cesme_holiday_leads(created_at);
 
--- 4) HIZLI SORGULAMA İNDEKSLERİ
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_fingerprint ON cesme_holiday_leads(fingerprint_hash);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_device_sig ON cesme_holiday_leads(device_signature);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_target_phone ON cesme_holiday_leads(target_phone);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_source ON cesme_holiday_leads(campaign_source);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_gpu ON cesme_holiday_leads(gpu_renderer);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_ip ON cesme_holiday_leads(ip_address);
-CREATE INDEX IF NOT EXISTS idx_cesme_leads_created ON cesme_holiday_leads(created_at);
-
-CREATE INDEX IF NOT EXISTS idx_unified_tracker_fp ON unified_suspect_tracker(fingerprint_hash);
-CREATE INDEX IF NOT EXISTS idx_unified_tracker_sig ON unified_suspect_tracker(device_signature);
-CREATE INDEX IF NOT EXISTS idx_unified_tracker_phone ON unified_suspect_tracker(target_phone);
-
--- 5) RLS (ROW LEVEL SECURITY) İZİNLERİ
+-- ========================================================================
+-- 4) RLS (ROW LEVEL SECURITY) POLİTİKALARI
+--    Anonim kullanıcıların veri eklemesi, okuması ve güncellemesi için
+-- ========================================================================
+ALTER TABLE facebook_suspect_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cesme_holiday_leads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE unified_suspect_tracker ENABLE ROW LEVEL SECURITY;
-ALTER TABLE whatsapp_leads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE facebook_leads ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "anon_insert_cesme_leads" ON cesme_holiday_leads;
-CREATE POLICY "anon_insert_cesme_leads" ON cesme_holiday_leads FOR INSERT TO anon WITH CHECK (true);
-DROP POLICY IF EXISTS "anon_select_cesme_leads" ON cesme_holiday_leads;
-CREATE POLICY "anon_select_cesme_leads" ON cesme_holiday_leads FOR SELECT TO anon USING (true);
-DROP POLICY IF EXISTS "anon_update_cesme_leads" ON cesme_holiday_leads;
-CREATE POLICY "anon_update_cesme_leads" ON cesme_holiday_leads FOR UPDATE TO anon USING (true) WITH CHECK (true);
+-- facebook_suspect_logs politikaları
+CREATE POLICY "anon_insert_fb" ON facebook_suspect_logs FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "anon_select_fb" ON facebook_suspect_logs FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_update_fb" ON facebook_suspect_logs FOR UPDATE TO anon USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "anon_insert_unified" ON unified_suspect_tracker;
-CREATE POLICY "anon_insert_unified" ON unified_suspect_tracker FOR INSERT TO anon WITH CHECK (true);
-DROP POLICY IF EXISTS "anon_select_unified" ON unified_suspect_tracker;
-CREATE POLICY "anon_select_unified" ON unified_suspect_tracker FOR SELECT TO anon USING (true);
-DROP POLICY IF EXISTS "anon_update_unified" ON unified_suspect_tracker;
-CREATE POLICY "anon_update_unified" ON unified_suspect_tracker FOR UPDATE TO anon USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_wa" ON whatsapp_leads;
-CREATE POLICY "anon_all_wa" ON whatsapp_leads FOR ALL TO anon USING (true) WITH CHECK (true);
-DROP POLICY IF EXISTS "anon_all_fb" ON facebook_leads;
-CREATE POLICY "anon_all_fb" ON facebook_leads FOR ALL TO anon USING (true) WITH CHECK (true);
+-- cesme_holiday_leads politikaları
+CREATE POLICY "anon_insert_leads" ON cesme_holiday_leads FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "anon_select_leads" ON cesme_holiday_leads FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_update_leads" ON cesme_holiday_leads FOR UPDATE TO anon USING (true) WITH CHECK (true);
 
 -- ========================================================================
--- 6) ŞÜPHELİ ÇAPRAZ EŞLEŞTİRME GÖRÜNÜMÜ (suspect_cross_match_view)
+-- 5) KONTROL: Tablolar başarıyla oluşturuldu mu?
 -- ========================================================================
--- Bu view; WhatsApp'tan gönderilen telefon numaraları ile Facebook/Web'den gelen
--- ziyaretçileri GPU, Parmak İzi, Cihaz İmzası ve Donanım özelliklerine göre
--- otomatik eşleştirir ve şüpheliyi deşifre eder!
--- ========================================================================
-
-CREATE OR REPLACE VIEW suspect_cross_match_view AS
-WITH matched_pairs AS (
-    SELECT 
-        w.target_phone AS whatsapp_phone,
-        w.campaign_source AS source_a,
-        f.campaign_source AS source_b,
-        w.fingerprint_hash,
-        w.device_signature,
-        w.gpu_renderer,
-        w.os AS os_name,
-        w.browser AS browser_name,
-        w.screen_resolution,
-        w.ip_address AS whatsapp_ip,
-        f.ip_address AS facebook_or_other_ip,
-        w.city AS whatsapp_city,
-        f.city AS other_city,
-        w.created_at AS whatsapp_click_time,
-        f.created_at AS other_click_time,
-        CASE 
-            WHEN w.device_signature IS NOT NULL AND w.device_signature = f.device_signature THEN 'KESİN EŞLEŞME (Kalıcı İmza / Cookie / IDB Birebir Aynı)'
-            WHEN w.fingerprint_hash = f.fingerprint_hash THEN 'YÜKSEK GÜVEN (Donanımsal GPU / Canvas Parmak İzi Birebir Aynı)'
-            WHEN w.gpu_renderer IS NOT NULL AND w.gpu_renderer = f.gpu_renderer AND w.screen_resolution = f.screen_resolution AND w.os = f.os THEN 'KUVVETLİ ŞÜPHE (GPU Modeli, Ekran ve OS Aynı Cihaz)'
-            ELSE 'OLASI EŞLEŞME (IP veya Bölge Yakınlığı)'
-        END AS match_confidence
-    FROM cesme_holiday_leads w
-    INNER JOIN cesme_holiday_leads f 
-        ON (
-            (w.device_signature IS NOT NULL AND w.device_signature = f.device_signature)
-            OR (w.fingerprint_hash = f.fingerprint_hash)
-            OR (w.gpu_renderer IS NOT NULL AND w.gpu_renderer = f.gpu_renderer AND w.screen_resolution = f.screen_resolution AND w.os = f.os)
-        )
-        AND w.id != f.id
-    WHERE w.target_phone IS NOT NULL
-)
 SELECT 
-    whatsapp_phone,
-    match_confidence,
-    source_a,
-    source_b,
-    os_name,
-    browser_name,
-    gpu_renderer,
-    screen_resolution,
-    whatsapp_ip,
-    facebook_or_other_ip,
-    whatsapp_city,
-    other_city,
-    whatsapp_click_time,
-    other_click_time,
-    fingerprint_hash,
-    device_signature
-FROM matched_pairs
-ORDER BY other_click_time DESC;
+    '✅ TABLOLAR BAŞARIYLA OLUŞTURULDU!' AS durum,
+    (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'facebook_suspect_logs') AS facebook_tablo,
+    (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'cesme_holiday_leads') AS cesme_tablo;

@@ -324,46 +324,82 @@ function generateRandomUuid() {
 // ==========================================
 async function generateFingerprint() {
     try {
-        // 1. WebGL GPU Unmasked Vendor & Renderer
-        var gpuInfo = getGpuDetails();
-        STATE.gpuVendor = gpuInfo.vendor;
-        STATE.gpuRenderer = gpuInfo.renderer;
+        var components = [];
 
-        // 2. Audio Fingerprint
-        var audioHash = await getAudioFingerprint();
+        // A) WebGL GPU Donanım Modeli
+        try {
+            var canvas = document.createElement('canvas');
+            var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+                var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                if (debugInfo) {
+                    STATE.gpuVendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || 'Bilinmiyor';
+                    STATE.gpuRenderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'Bilinmiyor';
+                }
+            }
+        } catch (e) {
+            STATE.gpuVendor = 'Unavailable';
+            STATE.gpuRenderer = 'Unavailable';
+        }
+        components.push('gpu:' + STATE.gpuRenderer);
 
-        // 3. Deep 2D Canvas Render
-        var canvasHash = getCanvasFingerprint();
+        // B) 2D Canvas Donanım Hash (Birebir Aynı Grafik Motoru)
+        try {
+            var c2 = document.createElement('canvas');
+            c2.width = 240;
+            c2.height = 60;
+            var ctx = c2.getContext('2d');
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillStyle = '#f60';
+            ctx.fillRect(125, 1, 62, 20);
+            ctx.fillStyle = '#069';
+            ctx.font = '11pt Arial';
+            ctx.fillText('Bülent Küçük Cantinos Allerød 🍕 1979', 2, 15);
+            ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+            ctx.font = '18pt Times New Roman';
+            ctx.fillText('Farum Danmark Bulduk', 4, 45);
+            STATE.canvasHash = cyrb53(c2.toDataURL());
+        } catch (e) {
+            STATE.canvasHash = 'no_canvas';
+        }
+        components.push('canvas:' + STATE.canvasHash);
 
-        var rawComponents = [
-            navigator.userAgent || '',
-            (navigator.languages || [navigator.language]).join(','),
-            screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
-            screen.availWidth + 'x' + screen.availHeight,
-            window.devicePixelRatio || 1,
-            new Date().getTimezoneOffset(),
-            Intl.DateTimeFormat().resolvedOptions().timeZone || '',
-            navigator.hardwareConcurrency || 'cpu_unknown',
-            navigator.deviceMemory || 'ram_unknown',
-            navigator.maxTouchPoints || 0,
-            navigator.platform || '',
-            STATE.gpuVendor || 'gpu_v_unknown',
-            STATE.gpuRenderer || 'gpu_r_unknown',
-            audioHash || 'audio_unknown',
-            canvasHash || 'canvas_unknown'
-        ];
+        // C) Web Audio Context Hash
+        try {
+            var AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) {
+                var audioCtx = new AudioContext();
+                var oscillator = audioCtx.createOscillator();
+                var analyser = audioCtx.createAnalyser();
+                var gain = audioCtx.createGain();
+                gain.gain.value = 0; // Sessiz
+                oscillator.type = 'triangle';
+                oscillator.frequency.value = 10000;
+                oscillator.connect(analyser);
+                analyser.connect(gain);
+                gain.connect(audioCtx.destination);
+                STATE.audioHash = cyrb53(audioCtx.sampleRate + '_' + analyser.frequencyBinCount);
+                if (audioCtx.state !== 'closed') audioCtx.close();
+            } else {
+                STATE.audioHash = 'no_audio';
+            }
+        } catch (e) {
+            STATE.audioHash = 'audio_err';
+        }
+        components.push('audio:' + STATE.audioHash);
 
-        var rawString = rawComponents.join('|||');
-        var encoder = new TextEncoder();
-        var data = encoder.encode(rawString);
-        var hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        var hashArray = Array.from(new Uint8Array(hashBuffer));
-        STATE.fingerprintHash = hashArray.map(function (b) {
-            return b.toString(16).padStart(2, '0');
-        }).join('');
+        // D) Ekran & Cihaz Donanımı
+        components.push('screen:' + screen.width + 'x' + screen.height + 'x' + screen.colorDepth);
+        components.push('dpr:' + (window.devicePixelRatio || 1));
+        components.push('cores:' + (navigator.hardwareConcurrency || 'unk'));
+        components.push('mem:' + (navigator.deviceMemory || 'unk'));
+        components.push('lang:' + (navigator.languages ? navigator.languages.join(',') : navigator.language));
+        components.push('platform:' + (navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform));
 
-        console.log('🔑 Donanımsal Parmak İzi Oluşturuldu:', STATE.fingerprintHash);
-        console.log('🎮 GPU Bilgisi:', STATE.gpuVendor, '|', STATE.gpuRenderer);
+        // Tekil Donanım Hash'i Üret (Her iki sitede de %100 birebir aynı kod)
+        STATE.fingerprintHash = 'fp_' + cyrb53(components.join('|||'));
+        console.log('🔑 [ORTAK DONANIM PARMAK İZİ]:', STATE.fingerprintHash);
+        console.log('🎮 [GPU RENDERER]:', STATE.gpuRenderer);
 
         await registerVisitor();
     } catch (e) {
@@ -373,95 +409,18 @@ async function generateFingerprint() {
     }
 }
 
-// WebGL GPU Kart Modeli Tespiti
-function getGpuDetails() {
-    try {
-        var canvas = document.createElement('canvas');
-        var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        if (!gl) return { vendor: 'WebGL Yok', renderer: 'WebGL Yok' };
-
-        var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-        if (debugInfo) {
-            var vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || 'Bilinmiyor';
-            var renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'Bilinmiyor';
-            return { vendor: vendor, renderer: renderer };
-        }
-        return {
-            vendor: gl.getParameter(gl.VENDOR) || 'Standart',
-            renderer: gl.getParameter(gl.RENDERER) || 'Standart'
-        };
-    } catch (e) {
-        return { vendor: 'Hata', renderer: 'Hata' };
+// 53-Bit Yüksek Hızlı Ortak Hash Fonksiyonu
+function cyrb53(str, seed) {
+    seed = seed || 0;
+    var h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (var i = 0, ch; i < str.length; i++) {
+        ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
     }
-}
-
-// Canvas 2D Grafik Motoru Hash'i
-function getCanvasFingerprint() {
-    try {
-        var canvas = document.createElement('canvas');
-        canvas.width = 240;
-        canvas.height = 60;
-        var ctx = canvas.getContext('2d');
-        if (!ctx) return '';
-        
-        ctx.textBaseline = 'top';
-        ctx.font = '14px Arial';
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillStyle = '#f60';
-        ctx.fillRect(125, 1, 62, 20);
-        ctx.fillStyle = '#069';
-        ctx.fillText('Cesme🏝️Alacati@2026!#', 2, 15);
-        ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
-        ctx.fillText('SuspectHunter🔒45', 4, 35);
-        
-        ctx.beginPath();
-        ctx.arc(50, 50, 10, 0, Math.PI * 2, true);
-        ctx.closePath();
-        ctx.fill();
-
-        return canvas.toDataURL();
-    } catch (e) {
-        return '';
-    }
-}
-
-// Web Audio Frekans Tepki Hash'i
-function getAudioFingerprint() {
-    return new Promise(function (resolve) {
-        try {
-            var AudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-            if (!AudioContext) return resolve('');
-
-            var context = new AudioContext(1, 44100, 44100);
-            var oscillator = context.createOscillator();
-            oscillator.type = 'triangle';
-            oscillator.frequency.setValueAtTime(10000, context.currentTime);
-
-            var compressor = context.createDynamicsCompressor();
-            compressor.threshold.setValueAtTime(-50, context.currentTime);
-            compressor.knee.setValueAtTime(40, context.currentTime);
-            compressor.ratio.setValueAtTime(12, context.currentTime);
-            compressor.attack.setValueAtTime(0, context.currentTime);
-            compressor.release.setValueAtTime(0.25, context.currentTime);
-
-            oscillator.connect(compressor);
-            compressor.connect(context.destination);
-            oscillator.start(0);
-
-            context.oncomplete = function (e) {
-                var samples = e.renderedBuffer.getChannelData(0);
-                var sum = 0;
-                for (var i = 0; i < samples.length; i += 100) {
-                    sum += Math.abs(samples[i]);
-                }
-                resolve(String(sum));
-            };
-
-            context.startRendering();
-        } catch (e) {
-            resolve('');
-        }
-    });
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 }
 
 // ==========================================
