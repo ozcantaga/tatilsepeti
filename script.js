@@ -575,41 +575,6 @@ async function registerVisitor() {
             city: STATE.ipCity || 'Bilinmiyor',
             country: STATE.ipCountry || 'Bilinmiyor'
         });
-
-        // Ortak Şüpheli Tracker Tablosuna Ham Log Bırak (Yedek Güvenlik)
-        try {
-            await STATE.supabaseClient
-                .from('unified_suspect_tracker')
-                .insert({
-                    device_signature: STATE.deviceSignature,
-                    fingerprint_hash: STATE.fingerprintHash,
-                    target_phone: STATE.targetPhone,
-                    campaign_source: STATE.campaignSource,
-                    target_table: tableToUse,
-                    page_url: window.location.href,
-                    referrer: document.referrer || null,
-                    ip_address: STATE.ipAddress,
-                    city: STATE.ipCity,
-                    region: STATE.ipRegion,
-                    country: STATE.ipCountry,
-                    latitude: STATE.ipLat,
-                    longitude: STATE.ipLng,
-                    device_type: deviceInfo.deviceType,
-                    os: deviceInfo.os,
-                    os_version: deviceInfo.osVersion,
-                    browser: deviceInfo.browser,
-                    browser_version: deviceInfo.browserVersion,
-                    gpu_vendor: STATE.gpuVendor,
-                    gpu_renderer: STATE.gpuRenderer,
-                    screen_resolution: deviceInfo.screenResolution,
-                    window_size: deviceInfo.windowSize,
-                    battery_level: STATE.batteryLevel,
-                    connection_type: deviceInfo.connectionType,
-                    user_agent: navigator.userAgent,
-                    raw_client_info: deviceInfo.rawInfo
-                });
-        } catch (unErr) {}
-
     } catch (e) {
         console.log('Ziyaretçi kaydı hatası:', e);
     }

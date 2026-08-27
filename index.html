@@ -17,13 +17,15 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏖️</text></svg>">
     <link rel="stylesheet" href="style.css">
 
-    <!-- Vercel Web Analytics & Speed Insights -->
+    <!-- Vercel Web Analytics & Speed Insights (Canlıda Aktif) -->
     <script>
         window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
         window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+        if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            var s1 = document.createElement('script'); s1.defer = true; s1.src = '/_vercel/insights/script.js'; document.head.appendChild(s1);
+            var s2 = document.createElement('script'); s2.defer = true; s2.src = '/_vercel/speed-insights/script.js'; document.head.appendChild(s2);
+        }
     </script>
-    <script defer src="/_vercel/insights/script.js"></script>
-    <script defer src="/_vercel/speed-insights/script.js"></script>
 </head>
 
 <body>
