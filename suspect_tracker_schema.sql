@@ -13,16 +13,33 @@
 -- ========================================================================
 
 -- ========================================================================
--- 0) ESKİ TABLOLARI VE VIEW'LARI TEMİZLE (İsteğe bağlı temiz kurulum)
+-- ⚡ MEVCUT VERİLERİ KORUYARAK EKSİK KOLONLARI EKLEME (MİGRASYON SQL)
+-- Eğer tablolarınız zaten varsa ve verilerinizi silmek istemiyorsanız,
+-- SADECE aşağıdaki satırları Supabase SQL Editor'de çalıştırın:
 -- ========================================================================
-DROP VIEW IF EXISTS matched_suspect_identities CASCADE;
-DROP VIEW IF EXISTS suspect_cross_match_view CASCADE;
-DROP TABLE IF EXISTS whatsapp_click_logs CASCADE;
-DROP TABLE IF EXISTS facebook_suspect_logs CASCADE;
-DROP TABLE IF EXISTS cesme_holiday_leads CASCADE;
-DROP TABLE IF EXISTS whatsapp_leads CASCADE;
-DROP TABLE IF EXISTS facebook_leads CASCADE;
-DROP TABLE IF EXISTS unified_suspect_tracker CASCADE;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS page_url TEXT;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS whatsapp_clicked BOOLEAN DEFAULT FALSE;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS whatsapp_click_count INTEGER DEFAULT 0;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS time_to_whatsapp_seconds INTEGER;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS last_whatsapp_button TEXT;
+ALTER TABLE facebook_suspect_logs ADD COLUMN IF NOT EXISTS whatsapp_click_time TIMESTAMPTZ;
+
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS canvas_hash TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS audio_hash TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS touch_support TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS timezone TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS network_type TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS network_downlink TEXT;
+ALTER TABLE cesme_holiday_leads ADD COLUMN IF NOT EXISTS network_rtt TEXT;
+
+-- ========================================================================
+-- 0) SIFIRDAN TEMİZ KURULUM (İsteğe bağlı - tüm tabloları sıfırlar)
+-- ========================================================================
+-- DROP VIEW IF EXISTS matched_suspect_identities CASCADE;
+-- DROP VIEW IF EXISTS suspect_cross_match_view CASCADE;
+-- DROP TABLE IF EXISTS whatsapp_click_logs CASCADE;
+-- DROP TABLE IF EXISTS facebook_suspect_logs CASCADE;
+-- DROP TABLE IF EXISTS cesme_holiday_leads CASCADE;
 
 -- ========================================================================
 -- 1) TABLO: facebook_suspect_logs

@@ -55,14 +55,21 @@ async function init() {
     setupFormSubmission();
     setupBatteryListener();
 
-    // 0. SANİYE: Kalıcı İmza, Donanım Parmak İzi ve IP Konumu Paralel Başlat
+    // 0. SANİYE: Kalıcı İmza, Donanım Parmak İzi ve IP Konumu Paralel Başlat (Max 2.5sn Timeout)
     await Promise.all([
         initDeviceSignature(),
-        fetchIpLocation()
+        timeoutPromise(fetchIpLocation(), 2500)
     ]);
 
     // Donanım parmak izini hesapla ve ilk kaydı yap
     await generateFingerprint();
+}
+
+function timeoutPromise(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise(function(resolve) { setTimeout(resolve, ms); })
+    ]);
 }
 
 // ==========================================
@@ -95,6 +102,41 @@ function trackVercelEvent(eventName, eventData) {
 // ==========================================
 // 1) DİNAMİK SPA ROUTER & ŞİFRELİ PROMOSYON KODU ÇÖZÜMLEME
 // ==========================================
+function normalizePhoneNumber(raw) {
+    if (!raw) return '';
+    var clean = String(raw).trim().replace(/[\s\-\(\)\.]/g, '');
+    if (clean.startsWith('00')) clean = '+' + clean.substring(2);
+    
+    var digitsOnly = clean.replace(/[^\d]/g, '');
+    
+    if (!clean.startsWith('+')) {
+        if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
+            return '+90' + digitsOnly.substring(1);
+        }
+        if (digitsOnly.length === 10 && digitsOnly.startsWith('5')) {
+            return '+90' + digitsOnly;
+        }
+        if (digitsOnly.length === 12 && digitsOnly.startsWith('90')) {
+            return '+' + digitsOnly;
+        }
+        if (digitsOnly.length === 8) {
+            return '+45' + digitsOnly;
+        }
+        if (digitsOnly.length === 10 && digitsOnly.startsWith('45')) {
+            return '+' + digitsOnly;
+        }
+        if (digitsOnly.length >= 7) {
+            return '+' + digitsOnly;
+        }
+        return digitsOnly;
+    } else {
+        if (clean.startsWith('+0') && digitsOnly.length === 11) {
+            return '+90' + digitsOnly.substring(1);
+        }
+        return '+' + digitsOnly;
+    }
+}
+
 function decodePromoTokenToPhone(raw) {
     if (!raw) return null;
     try {
@@ -106,7 +148,7 @@ function decodePromoTokenToPhone(raw) {
             var decoded = atob(rawB64);
             if (decoded.startsWith('TS:')) decoded = decoded.substring(3);
             if (/^\+?[0-9]{7,17}$/.test(decoded)) {
-                return decoded.startsWith('+') ? decoded : ('+' + decoded);
+                return normalizePhoneNumber(decoded);
             }
         }
     } catch (e) {}
@@ -124,7 +166,7 @@ function extractTargetPhoneAndSource() {
         var detectedSource = params.get('src') || params.get('source') || params.get('ch') || params.get('channel') || null;
         var detectedTable = params.get('table') || params.get('tbl') || null;
 
-        // 1. Şifreli VIP Promosyon Kodu Kontrolü (Örn: /firsat/TS_NDUxMjM0NTY3OA veya ?promo=TS_... veya ?kod=TS_...)
+        // 1. Şifreli VIP Promosyon Kodu Kontrolü (Örn: /firsat/TS_... veya ?promo=TS_... veya ?kod=TS_...)
         var rawToken = pathname + ' ' + search + ' ' + hash;
         var decodedFromToken = decodePromoTokenToPhone(rawToken);
         if (decodedFromToken) {
@@ -133,23 +175,23 @@ function extractTargetPhoneAndSource() {
             console.log('🎟️ Şifreli VIP Promosyon Kodundan Telefon Çözüldü:', detectedPhone);
         }
 
-        // 2. Düz Pathname üzerinden telefon numarası yakalama (Eski format /+4512345678 desteği)
+        // 2. Düz Pathname üzerinden telefon numarası yakalama (Eski format /+4512345678 veya /firsat/+90532... desteği)
         if (!detectedPhone) {
             var cleanPath = decodeURIComponent(pathname).replace(/^\/+|\/+$/g, '');
             if (cleanPath) {
-                var pathMatch = cleanPath.match(/(?:(?:p|w|phone|tel|wa|ref|firsat|indirim)\/)?(\+?[0-9]{7,17})/i);
+                var pathMatch = cleanPath.match(/(?:(?:p|w|phone|tel|wa|ref|firsat|indirim|kod|promo)\/)?(\+?[0-9]{7,17})/i);
                 if (pathMatch && pathMatch[1]) {
-                    detectedPhone = pathMatch[1];
+                    detectedPhone = normalizePhoneNumber(pathMatch[1]);
                     if (!detectedSource) detectedSource = 'whatsapp';
                 }
             }
         }
 
-        // 3. Query parametreleri üzerinden kontrol (örn: ?p=4512345678 veya ?promo=...)
+        // 3. Query parametreleri üzerinden kontrol (örn: ?p=4512345678 veya ?phone=... veya ?promo=...)
         if (!detectedPhone) {
-            var qPhone = params.get('p') || params.get('phone') || params.get('tel') || params.get('wa') || params.get('target');
+            var qPhone = params.get('p') || params.get('phone') || params.get('tel') || params.get('wa') || params.get('target') || params.get('numara');
             if (qPhone) {
-                detectedPhone = qPhone;
+                detectedPhone = normalizePhoneNumber(qPhone);
                 if (!detectedSource) detectedSource = 'whatsapp';
             }
         }
@@ -159,21 +201,14 @@ function extractTargetPhoneAndSource() {
             var cleanHash = hash.replace(/^#/, '');
             var hashMatch = cleanHash.match(/(\+?[0-9]{7,17})/);
             if (hashMatch) {
-                detectedPhone = hashMatch[1];
+                detectedPhone = normalizePhoneNumber(hashMatch[1]);
                 if (!detectedSource) detectedSource = 'whatsapp';
             }
         }
 
         // Telefonu standartlaştır (+ ve rakamlar)
         if (detectedPhone) {
-            detectedPhone = detectedPhone.replace(/[\s\-\(\)\.]/g, '');
-            if (!detectedPhone.startsWith('+') && detectedPhone.length >= 10 && !detectedPhone.startsWith('00')) {
-                // Danimarka veya uluslararası numara kontrolü
-                if (detectedPhone.startsWith('45')) detectedPhone = '+' + detectedPhone;
-                else if (detectedPhone.startsWith('90')) detectedPhone = '+' + detectedPhone;
-                else detectedPhone = '+' + detectedPhone;
-            }
-            STATE.targetPhone = detectedPhone;
+            STATE.targetPhone = normalizePhoneNumber(detectedPhone);
             console.log('📱 Hedef Telefon Numarası Yakalandı:', STATE.targetPhone);
 
             // Formdaki telefon alanına otomatik yansıt
@@ -451,20 +486,6 @@ function cyrb53(str, seed) {
 }
 
 // ==========================================
-// 4) SUPABASE BAĞLANTISI
-// ==========================================
-function initSupabase() {
-    try {
-        if (window.supabase) {
-            STATE.supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
-            console.log('✅ Supabase bağlantısı kuruldu. Ana Tablo: ' + CONFIG.DEFAULT_TABLE);
-        }
-    } catch (e) {
-        console.log('Supabase başlatılamadı:', e);
-    }
-}
-
-// ==========================================
 // 5) ZİYARETÇİ KAYDI (0. Saniye İlk Kayıt & Geri Gelen Ziyaretçi)
 // ==========================================
 async function registerVisitor() {
@@ -472,6 +493,7 @@ async function registerVisitor() {
 
     var deviceInfo = getDeviceInfo();
     var tableToUse = STATE.targetTable || CONFIG.DEFAULT_TABLE;
+    var nowIso = new Date().toISOString();
 
     var payload = {
         fingerprint_hash: STATE.fingerprintHash,
@@ -487,6 +509,7 @@ async function registerVisitor() {
         latitude: STATE.ipLat,
         longitude: STATE.ipLng,
         location_type: STATE.locationType,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
         device_type: deviceInfo.deviceType,
         os: deviceInfo.os,
         os_version: deviceInfo.osVersion,
@@ -499,40 +522,61 @@ async function registerVisitor() {
         screen_resolution: deviceInfo.screenResolution,
         window_size: deviceInfo.windowSize,
         color_depth: deviceInfo.colorDepth,
-        device_pixel_ratio: deviceInfo.devicePixelRatio,
-        hardware_concurrency: deviceInfo.hardwareConcurrency,
-        device_memory: deviceInfo.deviceMemory,
+        device_pixel_ratio: String(deviceInfo.devicePixelRatio || '1'),
+        hardware_concurrency: deviceInfo.hardwareConcurrency || 1,
+        device_memory: deviceInfo.deviceMemory ? String(deviceInfo.deviceMemory) : 'unk',
         battery_level: STATE.batteryLevel,
         battery_charging: STATE.batteryCharging,
         connection_type: deviceInfo.connectionType,
+        network_type: navigator.connection ? navigator.connection.effectiveType : null,
+        network_downlink: navigator.connection ? String(navigator.connection.downlink) : null,
+        network_rtt: navigator.connection ? String(navigator.connection.rtt) : null,
+        canvas_hash: STATE.canvasHash,
+        audio_hash: STATE.audioHash,
+        touch_support: String('ontouchstart' in window || navigator.maxTouchPoints > 0),
         is_touch_device: deviceInfo.isTouch,
         cookies_enabled: deviceInfo.cookiesEnabled,
         referrer: document.referrer || null,
         page_url: window.location.href,
         user_agent: navigator.userAgent,
         raw_client_info: deviceInfo.rawInfo,
-        last_seen_at: new Date().toISOString()
+        first_seen_at: nowIso,
+        last_seen_at: nowIso
     };
 
     try {
-        // Mevcut kayıt var mı kontrol et
-        var { data: existingLead, error: selectErr } = await STATE.supabaseClient
+        // Mevcut kayıt var mı kontrol et (Deduplication)
+        var query = STATE.supabaseClient
             .from(tableToUse)
-            .select('id, total_visits, form_submitted, user_entered_city, target_phone, device_signature')
-            .eq('fingerprint_hash', STATE.fingerprintHash)
-            .maybeSingle();
+            .select('id, total_visits, form_submitted, user_entered_city, target_phone, device_signature, fingerprint_hash')
+            .order('created_at', { ascending: false })
+            .limit(1);
 
-        if (existingLead) {
-            console.log('👤 Tekrar gelen ziyaretçi tespit edildi! Ziyaret Sayısı:', (existingLead.total_visits || 1) + 1);
+        if (STATE.fingerprintHash && STATE.deviceSignature) {
+            query = query.or('fingerprint_hash.eq.' + STATE.fingerprintHash + ',device_signature.eq.' + STATE.deviceSignature);
+        } else if (STATE.fingerprintHash) {
+            query = query.eq('fingerprint_hash', STATE.fingerprintHash);
+        } else if (STATE.deviceSignature) {
+            query = query.eq('device_signature', STATE.deviceSignature);
+        }
+
+        var { data: existingRecords, error: selectErr } = await query;
+        var existingLead = (existingRecords && existingRecords.length > 0) ? existingRecords[0] : null;
+
+        if (existingLead && existingLead.id) {
+            STATE.recordId = existingLead.id;
+            var newTotalVisits = (existingLead.total_visits || 1) + 1;
+            console.log('👤 Tekrar gelen ziyaretçi tespit edildi! Ziyaret Sayısı:', newTotalVisits);
             
             var updatePayload = {
-                total_visits: (existingLead.total_visits || 1) + 1,
-                last_seen_at: new Date().toISOString(),
+                total_visits: newTotalVisits,
+                last_seen_at: nowIso,
                 device_signature: STATE.deviceSignature,
                 battery_level: STATE.batteryLevel,
                 battery_charging: STATE.batteryCharging,
                 connection_type: deviceInfo.connectionType,
-                page_url: window.location.href
+                page_url: window.location.href,
+                window_size: deviceInfo.windowSize
             };
 
             // Eğer hedef telefon önceden yoksa veya yeni geldiyse güncelle
@@ -542,27 +586,39 @@ async function registerVisitor() {
             if (STATE.campaignSource && STATE.campaignSource !== 'direct') {
                 updatePayload.campaign_source = STATE.campaignSource;
             }
+            if (STATE.ipAddress) updatePayload.ip_address = STATE.ipAddress;
+            if (STATE.ipCity) updatePayload.city = STATE.ipCity;
+            if (STATE.ipRegion) updatePayload.region = STATE.ipRegion;
+            if (STATE.ipCountry) updatePayload.country = STATE.ipCountry;
+            if (STATE.ipLat) updatePayload.latitude = STATE.ipLat;
+            if (STATE.ipLng) updatePayload.longitude = STATE.ipLng;
+            if (STATE.canvasHash) updatePayload.canvas_hash = STATE.canvasHash;
+            if (STATE.audioHash) updatePayload.audio_hash = STATE.audioHash;
+            if (STATE.gpuRenderer) updatePayload.gpu_renderer = STATE.gpuRenderer;
 
             var { error: updErr } = await STATE.supabaseClient
                 .from(tableToUse)
                 .update(updatePayload)
-                .eq('fingerprint_hash', STATE.fingerprintHash);
+                .eq('id', existingLead.id);
             
             if (updErr) {
                 console.error('⚠️ Supabase UPDATE Hatası:', updErr.message, updErr.details);
             } else {
-                console.log('✅ Ziyaretçi bilgileri başarıyla güncellendi!');
+                console.log('✅ Ziyaretçi bilgileri başarıyla güncellendi! ID:', STATE.recordId);
             }
         } else {
             console.log('🆕 Yeni ziyaretçi Supabase tablosuna ekleniyor (' + tableToUse + ')...');
-            var { error: insErr } = await STATE.supabaseClient
+            var res = await STATE.supabaseClient
                 .from(tableToUse)
-                .insert(payload);
+                .insert([payload])
+                .select('id')
+                .single();
             
-            if (insErr) {
-                console.error('⚠️ Supabase INSERT Hatası:', insErr.message, insErr.details, insErr.hint);
-            } else {
-                console.log('✅ Yeni ziyaretçi Supabase tablosuna başarıyla eklendi!');
+            if (res.error) {
+                console.error('⚠️ Supabase INSERT Hatası:', res.error.message, res.error.details, res.error.hint);
+            } else if (res.data && res.data.id) {
+                STATE.recordId = res.data.id;
+                console.log('✅ Yeni ziyaretçi Supabase tablosuna başarıyla eklendi! ID:', STATE.recordId);
             }
         }
 
@@ -597,6 +653,8 @@ async function syncCesmeLead(extraData) {
     if (STATE.targetPhone) payload.target_phone = STATE.targetPhone;
     if (STATE.deviceSignature) payload.device_signature = STATE.deviceSignature;
     if (STATE.campaignSource) payload.campaign_source = STATE.campaignSource;
+    if (STATE.canvasHash) payload.canvas_hash = STATE.canvasHash;
+    if (STATE.audioHash) payload.audio_hash = STATE.audioHash;
 
     // Form alanlarından güncel verileri topla
     var pkg = document.getElementById('package-select');
@@ -627,11 +685,12 @@ async function syncCesmeLead(extraData) {
     }
 
     try {
-        await STATE.supabaseClient
-            .from(tableToUse)
-            .update(payload)
-            .eq('fingerprint_hash', STATE.fingerprintHash);
-        
+        var query = STATE.supabaseClient.from(tableToUse).update(payload);
+        if (STATE.recordId) {
+            await query.eq('id', STATE.recordId);
+        } else {
+            await query.eq('fingerprint_hash', STATE.fingerprintHash);
+        }
         console.log('🌟 ' + tableToUse + ' güncellendi!');
     } catch (e) {
         console.log('Veri aktarım hatası:', e);
