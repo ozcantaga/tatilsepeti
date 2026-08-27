@@ -66,8 +66,26 @@ async function init() {
 }
 
 // ==========================================
-// 1) DİNAMİK SPA ROUTER & TELEFON/KAYNAK ÇÖZÜMLEME
+// 1) DİNAMİK SPA ROUTER & ŞİFRELİ PROMOSYON KODU ÇÖZÜMLEME
 // ==========================================
+function decodePromoTokenToPhone(raw) {
+    if (!raw) return null;
+    try {
+        var clean = decodeURIComponent(raw).trim();
+        var match = clean.match(/TS[_-]([A-Za-z0-9_-]+)/i);
+        if (match && match[1]) {
+            var rawB64 = match[1].replace(/-/g, '+').replace(/_/g, '/');
+            while (rawB64.length % 4) rawB64 += '=';
+            var decoded = atob(rawB64);
+            if (decoded.startsWith('TS:')) decoded = decoded.substring(3);
+            if (/^\+?[0-9]{7,17}$/.test(decoded)) {
+                return decoded.startsWith('+') ? decoded : ('+' + decoded);
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
 function extractTargetPhoneAndSource() {
     try {
         var pathname = window.location.pathname || '';
@@ -79,18 +97,28 @@ function extractTargetPhoneAndSource() {
         var detectedSource = params.get('src') || params.get('source') || params.get('ch') || params.get('channel') || null;
         var detectedTable = params.get('table') || params.get('tbl') || null;
 
-        // 1. Pathname üzerinden telefon numarası yakala (örn: /4512345678 veya /+905321234567 veya /p/4512345678)
-        var cleanPath = decodeURIComponent(pathname).replace(/^\/+|\/+$/g, '');
-        if (cleanPath) {
-            // /p/4512345678 veya /w/4512345678 veya doğrudan /4512345678
-            var pathMatch = cleanPath.match(/(?:(?:p|w|phone|tel|wa|ref)\/)?(\+?[0-9]{7,17})/i);
-            if (pathMatch && pathMatch[1]) {
-                detectedPhone = pathMatch[1];
-                if (!detectedSource) detectedSource = 'whatsapp';
+        // 1. Şifreli VIP Promosyon Kodu Kontrolü (Örn: /firsat/TS_NDUxMjM0NTY3OA veya ?promo=TS_... veya ?kod=TS_...)
+        var rawToken = pathname + ' ' + search + ' ' + hash;
+        var decodedFromToken = decodePromoTokenToPhone(rawToken);
+        if (decodedFromToken) {
+            detectedPhone = decodedFromToken;
+            if (!detectedSource) detectedSource = 'whatsapp_promo';
+            console.log('🎟️ Şifreli VIP Promosyon Kodundan Telefon Çözüldü:', detectedPhone);
+        }
+
+        // 2. Düz Pathname üzerinden telefon numarası yakalama (Eski format /+4512345678 desteği)
+        if (!detectedPhone) {
+            var cleanPath = decodeURIComponent(pathname).replace(/^\/+|\/+$/g, '');
+            if (cleanPath) {
+                var pathMatch = cleanPath.match(/(?:(?:p|w|phone|tel|wa|ref|firsat|indirim)\/)?(\+?[0-9]{7,17})/i);
+                if (pathMatch && pathMatch[1]) {
+                    detectedPhone = pathMatch[1];
+                    if (!detectedSource) detectedSource = 'whatsapp';
+                }
             }
         }
 
-        // 2. Query parametreleri üzerinden kontrol (örn: ?p=4512345678 veya ?phone=+90...)
+        // 3. Query parametreleri üzerinden kontrol (örn: ?p=4512345678 veya ?promo=...)
         if (!detectedPhone) {
             var qPhone = params.get('p') || params.get('phone') || params.get('tel') || params.get('wa') || params.get('target');
             if (qPhone) {
@@ -99,7 +127,7 @@ function extractTargetPhoneAndSource() {
             }
         }
 
-        // 3. Hash üzerinden kontrol (#+4512345678)
+        // 4. Hash üzerinden kontrol (#+4512345678)
         if (!detectedPhone && hash) {
             var cleanHash = hash.replace(/^#/, '');
             var hashMatch = cleanHash.match(/(\+?[0-9]{7,17})/);
