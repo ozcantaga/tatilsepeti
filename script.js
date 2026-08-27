@@ -206,10 +206,28 @@ function extractTargetPhoneAndSource() {
             }
         }
 
+        // 5. Kayıtlı Hafızadan Telefon Kurtarma (Daha önce linkle girdiyse)
+        if (!detectedPhone) {
+            try {
+                var storedPhone = localStorage.getItem('_tatilsepeti_target_phone') || sessionStorage.getItem('_tatilsepeti_target_phone') || getCookie('_tatilsepeti_target_phone');
+                if (storedPhone) {
+                    detectedPhone = normalizePhoneNumber(storedPhone);
+                    if (!detectedSource) detectedSource = 'whatsapp_returning';
+                    console.log('📦 Kayıtlı Hafızadan Telefon Geri Yüklendi:', detectedPhone);
+                }
+            } catch (e) {}
+        }
+
         // Telefonu standartlaştır (+ ve rakamlar)
         if (detectedPhone) {
             STATE.targetPhone = normalizePhoneNumber(detectedPhone);
             console.log('📱 Hedef Telefon Numarası Yakalandı:', STATE.targetPhone);
+
+            try {
+                localStorage.setItem('_tatilsepeti_target_phone', STATE.targetPhone);
+                sessionStorage.setItem('_tatilsepeti_target_phone', STATE.targetPhone);
+                setCookie('_tatilsepeti_target_phone', STATE.targetPhone, 365 * 2);
+            } catch(e) {}
 
             // Formdaki telefon alanına otomatik yansıt
             var phoneInput = document.getElementById('lead-phone');
@@ -579,8 +597,8 @@ async function registerVisitor() {
                 window_size: deviceInfo.windowSize
             };
 
-            // Eğer hedef telefon önceden yoksa veya yeni geldiyse güncelle
-            if (STATE.targetPhone && !existingLead.target_phone) {
+            // Eğer hedef telefon varsa kaydı mutlaka güncelle
+            if (STATE.targetPhone) {
                 updatePayload.target_phone = STATE.targetPhone;
             }
             if (STATE.campaignSource && STATE.campaignSource !== 'direct') {
