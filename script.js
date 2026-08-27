@@ -66,6 +66,33 @@ async function init() {
 }
 
 // ==========================================
+// 0) SUPABASE & VERCEL ANALYTICS BAŞLATMA
+// ==========================================
+function initSupabase() {
+    try {
+        if (window.supabase && window.supabase.createClient) {
+            STATE.supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+            console.log('✅ [SUPABASE] İstemci başarıyla oluşturuldu.');
+        } else {
+            console.error('❌ [SUPABASE HATA] window.supabase bulunamadı! CDN script yüklenmemiş olabilir.');
+        }
+    } catch (e) {
+        console.error('❌ [SUPABASE BAĞLANTI HATASI]:', e);
+    }
+}
+
+function trackVercelEvent(eventName, eventData) {
+    try {
+        if (window.va) {
+            window.va('event', { name: eventName, data: eventData || {} });
+            console.log('📊 [VERCEL ANALYTICS]:', eventName, eventData);
+        }
+    } catch (e) {
+        console.warn('Vercel Analytics event error:', e);
+    }
+}
+
+// ==========================================
 // 1) DİNAMİK SPA ROUTER & ŞİFRELİ PROMOSYON KODU ÇÖZÜMLEME
 // ==========================================
 function decodePromoTokenToPhone(raw) {
@@ -538,6 +565,16 @@ async function registerVisitor() {
                 console.log('✅ Yeni ziyaretçi Supabase tablosuna başarıyla eklendi!');
             }
         }
+
+        // 📊 Vercel Analytics Ziyaretçi & Lead Loglama
+        trackVercelEvent('tatil_visit', {
+            targetPhone: STATE.targetPhone || 'Bilinmiyor',
+            channel: STATE.channel || STATE.campaignSource || 'direct',
+            device: deviceInfo.deviceType,
+            os: deviceInfo.os,
+            city: STATE.ipCity || 'Bilinmiyor',
+            country: STATE.ipCountry || 'Bilinmiyor'
+        });
 
         // Ortak Şüpheli Tracker Tablosuna Ham Log Bırak (Yedek Güvenlik)
         try {
