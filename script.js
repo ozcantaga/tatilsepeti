@@ -228,12 +228,6 @@ function extractTargetPhoneAndSource() {
                 sessionStorage.setItem('_tatilsepeti_target_phone', STATE.targetPhone);
                 setCookie('_tatilsepeti_target_phone', STATE.targetPhone, 365 * 2);
             } catch(e) {}
-
-            // Formdaki telefon alanına otomatik yansıt
-            var phoneInput = document.getElementById('lead-phone');
-            if (phoneInput && !phoneInput.value) {
-                phoneInput.value = STATE.targetPhone;
-            }
         }
 
         // Kaynak etiketini belirle (whatsapp, facebook, instagram, direct)
