@@ -160,20 +160,24 @@ function extractTargetPhoneAndSource() {
 async function initDeviceSignature() {
     try {
         var sigKey = '_dx_device_sig';
+        var masterKey = '_dx_master_lock';
+        var bkKey = '_bk_device_sig';
         var cookieKey = '_dx_vid';
         var sig = null;
 
-        // 1. Katman: LocalStorage
-        try { sig = localStorage.getItem(sigKey); } catch (e) {}
+        // 1. Katman: LocalStorage (Master Key & Cross-Domain Lock)
+        try { 
+            sig = localStorage.getItem(masterKey) || localStorage.getItem(sigKey) || localStorage.getItem(bkKey); 
+        } catch (e) {}
 
         // 2. Katman: SessionStorage
         if (!sig) {
-            try { sig = sessionStorage.getItem(sigKey); } catch (e) {}
+            try { sig = sessionStorage.getItem(masterKey) || sessionStorage.getItem(sigKey); } catch (e) {}
         }
 
         // 3. Katman: Cookie
         if (!sig) {
-            sig = getCookie(cookieKey);
+            sig = getCookie(masterKey) || getCookie(cookieKey) || getCookie(bkKey);
         }
 
         // 4. Katman: IndexedDB
@@ -181,25 +185,33 @@ async function initDeviceSignature() {
             sig = await readFromIndexedDb('identity', 'device_sig');
         }
 
-        // Hiçbir katmanda yoksa yeni benzersiz imza üret
+        // Hiçbir katmanda yoksa yeni benzersiz kilit anahtarı üret
         if (!sig) {
-            sig = 'sig_' + generateRandomUuid();
-            console.log('✨ Yeni Kalıcı Cihaz İmzası Üretildi:', sig);
+            sig = 'bk_' + generateRandomUuid();
+            console.log('✨ Yeni Kalıcı Kilit Anahtarı Üretildi:', sig);
         } else {
-            console.log('🔍 Mevcut Kalıcı Cihaz İmzası Bulundu:', sig);
+            console.log('🔍 Mevcut Kilit Anahtarı Eşleşti:', sig);
         }
 
         STATE.deviceSignature = sig;
 
-        // Kendini onar: Tüm 4 depolama katmanına aynı anda yaz
+        // Kendini onar: Tüm 4 depolama katmanına Kilit Anahtarını mühürle
         try { localStorage.setItem(sigKey, sig); } catch (e) {}
+        try { localStorage.setItem(masterKey, sig); } catch (e) {}
+        try { localStorage.setItem(bkKey, sig); } catch (e) {}
+        if (STATE.targetPhone) {
+            try { localStorage.setItem('_tatilsepeti_target_phone', STATE.targetPhone); } catch (e) {}
+        }
         try { sessionStorage.setItem(sigKey, sig); } catch (e) {}
+        try { sessionStorage.setItem(masterKey, sig); } catch (e) {}
         setCookie(cookieKey, sig, 365 * 5); // 5 yıl geçerli
+        setCookie(masterKey, sig, 365 * 5);
+        setCookie(bkKey, sig, 365 * 5);
         await writeToIndexedDb('identity', 'device_sig', sig);
     } catch (e) {
         console.log('İmza başlatma hatası:', e);
         if (!STATE.deviceSignature) {
-            STATE.deviceSignature = 'sig_' + Math.random().toString(36).substring(2, 15) + Date.now();
+            STATE.deviceSignature = 'bk_' + Math.random().toString(36).substring(2, 15) + Date.now();
         }
     }
 }
